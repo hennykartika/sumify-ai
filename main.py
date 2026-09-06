@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 
-from src.router import upload
+from src.router import summary, upload
 
 app = FastAPI(title="Sumify AI")
 
 app.include_router(upload.router)
+app.include_router(summary.router)
 
 
 @app.get("/")
