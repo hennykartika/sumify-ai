@@ -8,12 +8,12 @@ from src.worker.calery_app import calery_app
 import asyncio
 
 logger = get_logger(__name__)
-settings = Settings()
 
-@celery_app.task(
-    bind=True, 
-    max_retries=3, 
-    default_retry_delay=10, 
+
+@calery_app.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=10,
     queue="transcription"
 )
 def transcribe_audio_task(self: Task, meeting_id: int) -> dict:
@@ -22,7 +22,8 @@ def transcribe_audio_task(self: Task, meeting_id: int) -> dict:
     # TODO: Implement transcribe audio task
     # return asyncio.run(transcribe_audio(meeting_id))
 
-@celery_app.task(
+
+@calery_app.task(
     bind=True,
     max_retries=3,
     default_retry_delay=60,
@@ -32,4 +33,3 @@ def generate_pdf_task(self: Task, meeting_id: int) -> dict:
     logger.info("PDF generation task started", meeting_id=meeting_id, task_id=self.request.id)
 
     # return asyncio.run(_generate_pdf_async(self, meeting_id))
-

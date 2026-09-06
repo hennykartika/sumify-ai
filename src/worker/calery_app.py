@@ -2,12 +2,10 @@ from celery import Celery
 
 from src.core.config.setting import settings
 
-settings = Settings()
-
 calery_app = Celery(
     "sumify_ai",
-    broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND,
+    broker=settings.broker_url,
+    backend=settings.result_backend,
     # include=["src.worker.calery_task"]
 )
 
@@ -17,14 +15,14 @@ SUMMARY_QUEUE = "summarization"
 PDF_GENERATION_QUEUE = "pdf_generation"
 
 calery_app.conf.update(
-    task_serializer=settings.CELERY_TASK_SERIALIZER,
-    accept_content=settings.CELERY_ACCEPT_CONTENT,
-    result_serializer=settings.CELERY_RESULT_SERIALIZER,
-    timezone=settings.CELERY_TIMEZONE,
-    enable_utc=settings.CELERY_ENABLE_UTC,
-    task_track_started=settings.CELERY_TASK_TRACK_STARTED,
-    task_time_limit=settings.CELERY_TASK_TIME_LIMIT,
-    worker_prefetch_multiplier=settings.CELERY_WORKER_PREFETCH_MULTIPLIER,
+    task_serializer=settings.task_serializer,
+    accept_content=settings.accept_content,
+    result_serializer=settings.result_serializer,
+    timezone=settings.timezone,
+    enable_utc=settings.enable_utc,
+    task_track_started=settings.task_track_started,
+    task_time_limit=settings.task_time_limit,
+    worker_prefetch_multiplier=settings.worker_prefetch_multiplier,
 
     task_routes={
         "sumify_ai.tasks.transcribe_audio": {"queue": "transcribe"},
@@ -68,6 +66,7 @@ calery_app.conf.task_queues = {
         "routing_key": "default",
     },
 }
+
 
 def init_calery() -> Celery:
     return calery_app
