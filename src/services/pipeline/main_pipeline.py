@@ -62,7 +62,11 @@ async def summarize_and_generate_pdf(
                 "Jalankan transkripsi lebih dulu."
             )
 
-        audio_filename = Path(meeting.storage_path or "").name or None
+        # Nama file asli disimpan di kolom description saat upload. Kalau meeting
+        # lama belum punya, jatuh ke nama acak hasil storage.
+        audio_filename = (
+            meeting.description or Path(meeting.storage_path or "").name or None
+        )
 
         # ── Tahap 1: ringkasan ──
         await meeting_repo.update_status(meeting_id, ProcessingStatus.SUMMARIZING)

@@ -41,6 +41,7 @@ async def upload_audio(
         meeting = await repo.create(
             user_id=user_id,
             title=title or file.filename,
+            description=file.filename,
             language=language,
             storage_path=info.storage_path,
             storage_bucket=info.storage_bucket,

@@ -1,6 +1,7 @@
 """Storage service abstraction."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 from uuid import uuid4
 
 from src.core.storage.minio import MinioService
@@ -174,9 +175,10 @@ class StorageService:
         Returns:
             Presigned URL.
         """
+        # miniopy-async minta timedelta, bukan detik dalam bentuk integer.
         return await self.storage.get_file_url(
             object_name=storage_path,
-            expires=expiry,
+            expires=timedelta(seconds=expiry),
         )
 
     async def download_file(
