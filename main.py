@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 
-from src.router import summary, upload
+from src.router import pdf_generator, pdf_templates, summary, upload
 
 app = FastAPI(title="Sumify AI")
 
 app.include_router(upload.router)
 app.include_router(summary.router)
+app.include_router(pdf_templates.router)
+app.include_router(pdf_generator.router)
 
 
 @app.get("/")
