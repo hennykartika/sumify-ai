@@ -1,11 +1,10 @@
 from fastapi import FastAPI
 
-from src.router import transcribe
+from src.router import upload
 
 app = FastAPI(title="Sumify AI")
 
-# Register routers
-# app.include_router(transcribe.router)
+app.include_router(upload.router)
 
 
 @app.get("/")
