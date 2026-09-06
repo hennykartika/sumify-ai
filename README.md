@@ -26,10 +26,10 @@ Project ini merupakan repository untuk aplikasi Android atau tampilan user Sumif
 | Ringkasan otomatis dengan LLM | Selesai, teruji |
 | Cetak PDF dari ringkasan | Selesai, teruji |
 | Presigned URL untuk unduh PDF | Selesai, teruji |
-| Transkripsi otomatis (Whisper) | Belum aktif, transkrip masih diisi manual |
+| Transkripsi otomatis (Whisper) | Selesai, teruji |
 | Background worker (Celery) | Konfigurasi siap, isi task masih kosong |
 
-Karena transkripsi otomatis belum aktif, tersedia endpoint `POST /meetings/{id}/transcript` untuk mengisi transkrip secara manual, sehingga alur ringkasan sampai PDF tetap bisa diuji.
+Alur lengkap sudah berjalan dari berkas audio sampai PDF tanpa langkah manual. Endpoint `POST /meetings/{id}/transcript` tetap tersedia untuk mengisi transkrip secara manual bila diperlukan, misalnya saat menguji tanpa audio.
 
 Seluruh proses saat ini berjalan sinkron di dalam request. Satu permintaan ringkasan memakan waktu sekitar 30 detik.
 
@@ -46,7 +46,7 @@ Seluruh proses saat ini berjalan sinkron di dalam request. Satu permintaan ringk
 | `miniopy-async` | Klien MinIO / S3 |
 | `httpx` | HTTP client async ke penyedia LLM |
 | `playwright` | Render HTML menjadi PDF |
-| `faster-whisper` | Speech-to-text (belum aktif) |
+| `faster-whisper` | Speech-to-text lokal |
 | `celery` + `redis` | Background worker (belum aktif) |
 | `structlog` | Logging terstruktur |
 | `python-multipart` | Upload file audio |
@@ -79,6 +79,7 @@ Rencana awal memakai Apilogy (`src/core/llm/apilogy.py`), tetapi kredensialnya b
 | --- | --- | --- |
 | `POST` | `/api/v1/upload-audio` | Unggah audio, simpan ke storage, buat Meeting |
 | `GET` | `/api/v1/templates` | Jenis ringkasan yang tersedia |
+| `POST` | `/api/v1/meetings/{id}/transcribe` | Transkripsi otomatis dengan Whisper |
 | `POST` | `/api/v1/meetings/{id}/transcript` | Isi transkrip manual |
 | `POST` | `/api/v1/meetings/{id}/summarize` | Ringkas transkrip lalu cetak PDF |
 | `GET` | `/api/v1/meetings/{id}/pdf` | Unduh PDF hasil ringkasan |
@@ -86,6 +87,18 @@ Rencana awal memakai Apilogy (`src/core/llm/apilogy.py`), tetapi kredensialnya b
 | `POST` | `/api/v1/meetings/{id}/regenerate-pdf` | Cetak ulang PDF tanpa memanggil LLM |
 
 Dokumentasi interaktif tersedia di `http://localhost:8000/docs`.
+
+## Model Whisper
+
+Ukuran model diatur lewat `.env`. Bawaannya `base` (unduhan ~150 MB, cukup akurat untuk notulen). Untuk laptop yang lebih lemah, ganti ke `tiny`.
+
+```
+WHISPER_MODEL=base
+WHISPER_DEVICE=cpu
+WHISPER_COMPUTE_TYPE=int8
+```
+
+Unduhan model terjadi sekali saat transkripsi pertama, lalu tersimpan di cache.
 
 ## Jenis Ringkasan
 
@@ -183,7 +196,7 @@ sumify-ai/
     │   ├── pipeline/main_pipeline.py# Rangkaian ringkasan -> PDF
     │   ├── storage/                 # Abstraksi storage
     │   ├── summary_generator/       # Transkrip -> JSON terstruktur
-    │   └── transcriber/             # Whisper (belum aktif)
+    │   └── transcriber/             # Whisper (faster-whisper)
     ├── utils/llm.py                 # Klien LLM yang dipakai sekarang
     └── worker/                      # Celery (belum aktif)
 ```
@@ -191,7 +204,7 @@ sumify-ai/
 ## Alur Kerja
 
 1. **Upload** — audio masuk ke MinIO, baris `Meeting` dibuat dengan status `uploaded`
-2. **Transkripsi** — saat ini diisi manual, tersimpan sebagai `Transcription`
+2. **Transkripsi** — audio diunduh dari MinIO, diproses Whisper, tersimpan sebagai `Transcription`, status `transcribing`
 3. **Ringkasan** — transkrip dikirim ke LLM, hasilnya JSON terstruktur, status `summarizing`
 4. **PDF** — konteks dirender ke template HTML lalu dicetak Playwright, status `generating_pdf`
 5. **Simpan** — PDF diunggah ke MinIO, `pdf_url` disimpan, status `completed`
