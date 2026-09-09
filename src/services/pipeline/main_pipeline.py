@@ -6,7 +6,9 @@ fungsi `summarize_and_generate_pdf` tinggal dipanggil dari task worker.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from src.core.database.postgree import async_session_maker
@@ -20,6 +22,7 @@ from src.schemas.common import ProcessingStatus
 from src.services.pdf_generator.pdf_generator_service import PDFGeneratorService
 from src.services.storage.storage import storage_service
 from src.services.summary_generator import get_summary_service
+from src.services.transcriber import TranscriptionError, get_transcriber
 
 logger = get_logger(__name__)
 
@@ -62,11 +65,7 @@ async def summarize_and_generate_pdf(
                 "Jalankan transkripsi lebih dulu."
             )
 
-        # Nama file asli disimpan di kolom description saat upload. Kalau meeting
-        # lama belum punya, jatuh ke nama acak hasil storage.
-        audio_filename = (
-            meeting.description or Path(meeting.storage_path or "").name or None
-        )
+        audio_filename = Path(meeting.storage_path or "").name or None
 
         # ── Tahap 1: ringkasan ──
         await meeting_repo.update_status(meeting_id, ProcessingStatus.SUMMARIZING)
@@ -139,3 +138,146 @@ async def summarize_and_generate_pdf(
             pdf_url=pdf_url,
             summary_id=summary_row.id,
         )
+
+
+async def transcribe_meeting_audio(
+    meeting_id: int,
+    language: str | None = None,
+) -> dict:
+    """Unduh audio meeting dari storage lalu transkripsikan dengan Whisper.
+
+    Raises:
+        PipelineError: meeting tidak ada, tanpa audio, atau transkripsi gagal.
+    """
+    async with async_session_maker() as session:
+        meeting_repo = MeetingRepository(session)
+        meeting = await meeting_repo.get_by_id(meeting_id)
+
+        if meeting is None:
+            raise PipelineError(f"Meeting {meeting_id} tidak ditemukan")
+        if not meeting.storage_path:
+            raise PipelineError(f"Meeting {meeting_id} tidak punya berkas audio")
+
+        await meeting_repo.update_status(meeting_id, ProcessingStatus.TRANSCRIBING)
+
+    tmp_path: Path | None = None
+
+    try:
+        # Whisper membaca dari disk, jadi audio diunduh ke berkas sementara.
+        audio_bytes = await storage_service.download_file(meeting.storage_path)
+        suffix = Path(meeting.storage_path).suffix or ".mp3"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = Path(tmp.name)
+
+        result = await get_transcriber().transcribe(
+            tmp_path, language=language or meeting.language or None
+        )
+    except TranscriptionError as exc:
+        async with async_session_maker() as session:
+            await MeetingRepository(session).update_status(
+                meeting_id, ProcessingStatus.FAILED
+            )
+        raise PipelineError(str(exc)) from exc
+    except Exception as exc:
+        async with async_session_maker() as session:
+            await MeetingRepository(session).update_status(
+                meeting_id, ProcessingStatus.FAILED
+            )
+        logger.error(f"Transkripsi meeting {meeting_id} gagal: {exc}")
+        raise PipelineError(f"Transkripsi gagal: {exc}") from exc
+    finally:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+    async with async_session_maker() as session:
+        transcription_repo = TranscriptionRepository(session)
+        values = {
+            "full_text": result.full_text,
+            "segments": result.segments,
+            "language": result.language,
+        }
+
+        existing = await transcription_repo.get_by_meeting_id(meeting_id)
+        if existing is None:
+            row = await transcription_repo.create(meeting_id=meeting_id, **values)
+        else:
+            row = await transcription_repo.update(existing.id, **values)
+
+        await MeetingRepository(session).update_status(
+            meeting_id, ProcessingStatus.UPLOADED
+        )
+
+    return {
+        "transcription_id": row.id,
+        "language": result.language,
+        "duration": result.duration_label,
+        "segments": len(result.segments),
+        "length": len(result.full_text),
+        "preview": result.full_text[:300],
+    }
+
+
+async def regenerate_pdf_from_summary(
+    meeting_id: int,
+    template_type: str = "simple",
+) -> Path:
+    """Cetak ulang PDF dari ringkasan yang sudah tersimpan, tanpa memanggil LLM."""
+    from src.prompts.prompt_handler import build_prompt
+
+    async with async_session_maker() as session:
+        meeting = await MeetingRepository(session).get_by_id(meeting_id)
+        if meeting is None:
+            raise PipelineError(f"Meeting {meeting_id} tidak ditemukan")
+
+        summary = await SummaryRepository(session).get_by_meeting_id(meeting_id)
+        if summary is None:
+            raise PipelineError(
+                f"Meeting {meeting_id} belum punya ringkasan. Jalankan summarize dulu."
+            )
+
+    spec = build_prompt(template_type, "placeholder")
+
+    language_label = {"id": "Indonesia", "en": "English"}.get(
+        meeting.language or "id", meeting.language or "-"
+    )
+    audio_filename = (
+        meeting.description or Path(meeting.storage_path or "").name or "-"
+    )
+
+    context = {
+        "title": meeting.title or "Ringkasan Rapat",
+        "audio_filename": audio_filename,
+        "generated_date": datetime.now().strftime("%d %B %Y"),
+        "language": language_label,
+        "duration": "-",
+    }
+
+    if spec.pdf_template == "business":
+        context.update(
+            {
+                "executive_summary": summary.summary or "",
+                "key_discussion_points": summary.key_points or [],
+                "decisions": summary.decisions or [],
+                "next_steps": [],
+                "action_assignment": summary.action_items or [],
+            }
+        )
+    else:
+        context.update(
+            {
+                "summary": summary.summary or "",
+                "key_points": summary.key_points or [],
+                "keywords": [],
+                "action_items": summary.action_items or [],
+            }
+        )
+
+    pdf_path = await asyncio.to_thread(
+        PDFGeneratorService().generate_pdf,
+        spec.pdf_template,
+        context,
+        f"meeting-{meeting_id}-{spec.template_type}.pdf",
+    )
+    return Path(pdf_path)
