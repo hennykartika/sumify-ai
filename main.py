@@ -40,4 +40,14 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # proxy_headers + forwarded_allow_ips diperlukan saat backend diakses
+    # lewat tunnel (Cloudflare, ngrok). Tanpa itu, URL yang dibangun server
+    # memakai skema http meski pengguna mengaksesnya lewat https.
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )

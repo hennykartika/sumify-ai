@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 
 from src.core.database.postgree import async_session_maker
 from src.core.logging.logger import get_logger
@@ -131,8 +132,44 @@ async def create_meeting(
     return {"id": str(meeting_id), "status": ProcessingStatus.QUEUED.value}
 
 
+@router.get("/{meeting_id}/download")
+async def download_meeting_pdf(meeting_id: str):
+    """Alirkan PDF hasil ringkasan lewat API.
+
+    Sengaja tidak memakai presigned URL MinIO, karena URL itu menunjuk ke
+    host storage (localhost:9000) yang tidak terjangkau dari perangkat lain.
+    Dengan dialirkan lewat endpoint ini, satu alamat backend sudah cukup.
+    """
+    try:
+        numeric_id = int(meeting_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="id meeting tidak valid")
+
+    async with async_session_maker() as session:
+        meeting = await MeetingRepository(session).get_by_id(numeric_id)
+
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting tidak ditemukan")
+    if not meeting.pdf_url:
+        raise HTTPException(status_code=404, detail="PDF belum tersedia")
+
+    try:
+        pdf_bytes = await storage_service.download_file(meeting.pdf_url)
+    except Exception as exc:
+        logger.error(f"Gagal mengambil PDF meeting {numeric_id}: {exc}")
+        raise HTTPException(status_code=502, detail="Gagal mengambil PDF") from exc
+
+    filename = meeting.pdf_url.rsplit("/", 1)[-1] or f"meeting-{numeric_id}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/{meeting_id}")
-async def get_meeting_detail(meeting_id: str):
+async def get_meeting_detail(meeting_id: str, request: Request):
     """Status dan hasil satu meeting. Dipakai untuk polling oleh aplikasi."""
     try:
         numeric_id = int(meeting_id)
@@ -149,12 +186,11 @@ async def get_meeting_detail(meeting_id: str):
         )
         summary = await SummaryRepository(session).get_by_meeting_id(numeric_id)
 
+    # URL dibangun dari host permintaan, jadi otomatis benar baik saat diakses
+    # lewat localhost maupun lewat tunnel/domain publik.
     download_url: str | None = None
     if meeting.pdf_url:
-        try:
-            download_url = await storage_service.get_file_url(meeting.pdf_url)
-        except Exception as exc:
-            logger.warning(f"Gagal membuat URL unduh meeting {numeric_id}: {exc}")
+        download_url = str(request.url_for("download_meeting_pdf", meeting_id=meeting_id))
 
     status = meeting.status
     status_value = status.value if hasattr(status, "value") else str(status)
