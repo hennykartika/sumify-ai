@@ -1,7 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.router import pdf_generator, pdf_templates, summary, transcribe, upload
+from src.router import (
+    meetings,
+    pdf_generator,
+    pdf_templates,
+    summary,
+    transcribe,
+    upload,
+)
 
 app = FastAPI(title="Sumify AI")
 
@@ -15,6 +22,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Kontrak API untuk aplikasi Android (sumify-ai-fe)
+app.include_router(meetings.router)
+
+# Endpoint per tahap, dipakai untuk pengujian dan pemakaian manual
 app.include_router(upload.router)
 app.include_router(transcribe.router)
 app.include_router(summary.router)
