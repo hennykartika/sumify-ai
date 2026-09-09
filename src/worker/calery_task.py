@@ -4,10 +4,21 @@ Setiap task hanya membungkus fungsi async yang sudah dipakai dan diuji lewat
 endpoint HTTP, jadi logikanya tidak digandakan.
 
 Menjalankan worker (butuh Redis hidup):
-    celery -A src.worker.calery_app.calery_app worker --loglevel=info --pool=solo
 
-Catatan: di Windows wajib pakai --pool=solo karena pool prefork bawaan Celery
-tidak berjalan di sana.
+    celery -A src.worker.calery_app.calery_app worker --loglevel=info \\
+        --pool=solo -Q default,transcription,summarization,pdf_generation
+
+Dua opsi itu wajib:
+- --pool=solo karena pool prefork bawaan Celery tidak jalan di Windows
+- -Q ... karena tanpa itu worker hanya mendengarkan queue "default",
+  sedangkan task-task di bawah dikirim ke queue transcription,
+  summarization, dan pdf_generation
+
+Mengirim task dari Python:
+
+    from src.worker.calery_task import generate_summary_task
+    result = generate_summary_task.delay(meeting_id=3, template_type="business")
+    print(result.get(timeout=300))
 """
 from __future__ import annotations
 

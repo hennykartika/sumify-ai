@@ -6,10 +6,10 @@ calery_app = Celery(
     "sumify_ai",
     broker=settings.broker_url,
     backend=settings.result_backend,
-    # include=["src.worker.calery_task"]
+    include=["src.worker.calery_task"],
 )
 
-# Queue names
+# Nama queue. Harus sama dengan argumen queue= pada decorator di calery_task.py.
 TRANSCRIBE_QUEUE = "transcription"
 SUMMARY_QUEUE = "summarization"
 PDF_GENERATION_QUEUE = "pdf_generation"
@@ -24,20 +24,14 @@ calery_app.conf.update(
     task_time_limit=settings.task_time_limit,
     worker_prefetch_multiplier=settings.worker_prefetch_multiplier,
 
-    task_routes={
-        "sumify_ai.tasks.transcribe_audio": {"queue": "transcribe"},
-        "sumify_ai.tasks.generate_summary": {"queue": "summary"},
-        "sumify_ai.tasks.generate_pdf": {"queue": "pdf"},
-    },
+    # Routing ditentukan lewat queue= di decorator masing-masing task,
+    # jadi task_routes tidak dipakai. Sebelumnya blok itu menunjuk ke nama
+    # task "sumify_ai.tasks.*" yang tidak pernah terdaftar, sehingga task
+    # tidak sampai ke worker.
+    task_default_queue="default",
 
     result_expires=3600 * 24,
     result_extended=True,
-
-    task_annotations={
-        "sumify_ai.tasks.transcribe_audio": {"rate_limit": "10/s"},
-        "sumify_ai.tasks.generate_summary": {"rate_limit": "10/s"},
-        "sumify_ai.tasks.generate_pdf": {"rate_limit": "10/s"},
-    },
 
     worker_hijack_root_logger=False,
     worker_redirect_stdouts=False,
@@ -45,27 +39,8 @@ calery_app.conf.update(
     broker_connection_retry_on_startup=True,
     broker_transport_options={
         "visibility_timeout": 3600,
-    }
+    },
 )
-
-calery_app.conf.task_queues = {
-    TRANSCRIBE_QUEUE: {
-        "exchange": "sumify_ai",
-        "routing_key": "transcribe",
-    },
-    SUMMARY_QUEUE: {
-        "exchange": "sumify_ai",
-        "routing_key": "summary",
-    },
-    PDF_GENERATION_QUEUE: {
-        "exchange": "sumify_ai",
-        "routing_key": "pdf_generation",
-    },
-    "default": {
-        "exchange": "sumify_ai",
-        "routing_key": "default",
-    },
-}
 
 
 def init_calery() -> Celery:
