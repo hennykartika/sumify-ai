@@ -27,11 +27,11 @@ Project ini merupakan repository untuk aplikasi Android atau tampilan user Sumif
 | Cetak PDF dari ringkasan | Selesai, teruji |
 | Presigned URL untuk unduh PDF | Selesai, teruji |
 | Transkripsi otomatis (Whisper) | Selesai, teruji |
-| Background worker (Celery) | Konfigurasi siap, isi task masih kosong |
+| Background worker (Celery) | Selesai, teruji dengan Memurai (Redis untuk Windows) |
 
 Alur lengkap sudah berjalan dari berkas audio sampai PDF tanpa langkah manual. Endpoint `POST /meetings/{id}/transcript` tetap tersedia untuk mengisi transkrip secara manual bila diperlukan, misalnya saat menguji tanpa audio.
 
-Seluruh proses saat ini berjalan sinkron di dalam request. Satu permintaan ringkasan memakan waktu sekitar 30 detik.
+Endpoint HTTP menjalankan prosesnya secara sinkron, sehingga satu permintaan ringkasan memakan waktu sekitar 30 detik. Untuk pemakaian tanpa menunggu, pekerjaan yang sama bisa dikirim ke worker Celery (lihat bagian Background Worker).
 
 ## Teknologi Utama
 
@@ -47,7 +47,7 @@ Seluruh proses saat ini berjalan sinkron di dalam request. Satu permintaan ringk
 | `httpx` | HTTP client async ke penyedia LLM |
 | `playwright` | Render HTML menjadi PDF |
 | `faster-whisper` | Speech-to-text lokal |
-| `celery` + `redis` | Background worker (belum aktif) |
+| `celery` + `redis` | Background worker |
 | `structlog` | Logging terstruktur |
 | `python-multipart` | Upload file audio |
 
@@ -162,6 +162,43 @@ python main.py
 
 Buka `http://localhost:8000/docs`.
 
+## Background Worker (Celery)
+
+Pekerjaan berat bisa dijalankan di latar belakang lewat Celery, sehingga pemanggil tidak perlu menunggu. Task-nya membungkus fungsi pipeline yang sama dengan yang dipakai endpoint HTTP, jadi tidak ada logika yang digandakan.
+
+**Redis.** Di Linux atau Docker, jalankan Redis seperti biasa. Di Windows tanpa Docker, pakai [Memurai](https://www.memurai.com/get-memurai) Developer Edition (Redis versi Windows, gratis untuk pengembangan). Setelah terpasang, dia berjalan sebagai layanan Windows di port 6379.
+
+Cek Redis hidup:
+
+```bash
+python -c "import asyncio; from src.core.database.redis import ping; print(asyncio.run(ping()))"
+```
+
+**Jalankan worker:**
+
+```bash
+celery -A src.worker.calery_app.calery_app worker --loglevel=info \
+    --pool=solo -Q default,transcription,summarization,pdf_generation
+```
+
+Dua opsi itu wajib. `--pool=solo` karena pool prefork bawaan Celery tidak berjalan di Windows. `-Q` karena tanpa itu worker hanya mendengarkan queue `default`, sedangkan task dikirim ke queue `transcription`, `summarization`, dan `pdf_generation`.
+
+**Kirim pekerjaan:**
+
+```python
+from src.worker.calery_task import full_pipeline_task
+
+result = full_pipeline_task.delay(meeting_id=3, template_type="business")
+print(result.get(timeout=600))
+```
+
+| Task | Queue | Keterangan |
+| --- | --- | --- |
+| `transcribe_audio_task` | `transcription` | Transkripsi audio dengan Whisper |
+| `generate_summary_task` | `summarization` | Ringkasan LLM lalu cetak PDF |
+| `generate_pdf_task` | `pdf_generation` | Cetak ulang PDF tanpa memanggil LLM |
+| `full_pipeline_task` | `transcription` | Transkripsi lalu ringkasan, berurutan |
+
 ## Struktur Folder
 
 ```
@@ -198,7 +235,7 @@ sumify-ai/
     │   ├── summary_generator/       # Transkrip -> JSON terstruktur
     │   └── transcriber/             # Whisper (faster-whisper)
     ├── utils/llm.py                 # Klien LLM yang dipakai sekarang
-    └── worker/                      # Celery (belum aktif)
+    └── worker/                      # Task Celery
 ```
 
 ## Alur Kerja
@@ -217,3 +254,13 @@ Bila salah satu tahap gagal, status meeting menjadi `failed`.
 python scripts/smoke_test_crud.py    # Lapisan database
 python scripts/test_pdf_dummy.py     # PDF generator dengan data contoh
 ```
+
+## Catatan Pengembangan
+
+Beberapa hal yang sempat menjadi jebakan, dicatat agar tidak terulang:
+
+- `miniopy-async` versi 1.21.x menuntut `aiohttp.ClientSession` pada `get_object`, sedangkan versi yang lebih baru tidak. Ditangani di `src/services/storage/storage.py`.
+- Pustaka yang sama menuntut `timedelta` untuk parameter `expires` pada presigned URL, bukan detik dalam bentuk integer.
+- PDF generator memakai Playwright versi sinkron, jadi dipanggil lewat `asyncio.to_thread` dari pipeline yang async.
+- Pada FastAPI versi baru, `@router.get("")` dengan prefix membuat rute tidak terdaftar sama sekali. Path harus ditulis di decorator.
+- Nama file audio asli disimpan di kolom `description` pada tabel `meetings`, supaya tampil di PDF alih-alih nama acak hasil storage.
